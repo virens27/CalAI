@@ -55,8 +55,8 @@ export default function App() {
       };
       setMeals(prev => [newMeal, ...prev]);
       setSelectedMeal(newMeal);
-    } catch (error) {
-      Alert.alert('Error', 'Could not analyse food. Please try again.');
+    } catch (error: any) {
+      Alert.alert('Error Details', String(error.message));
     } finally {
       setIsAnalyzing(false);
     }

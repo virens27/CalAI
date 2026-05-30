@@ -44,15 +44,13 @@ Estimate conservatively. If multiple foods are visible, give totals for everythi
     });
 
     if (!response.ok) {
-        throw new Error(`API error: ${response.status}`);
+        const errText = await response.text();
+        throw new Error(`API error ${response.status}: ${errText}`);
     }
 
     const data = await response.json();
     const content = data.choices[0].message.content.trim();
-
-    // Clean response in case model adds markdown
     const cleaned = content.replace(/```json|```/g, '').trim();
     const result = JSON.parse(cleaned);
-
     return result as NutritionResult;
 }
