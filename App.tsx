@@ -2,8 +2,9 @@ import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import { useState } from 'react';
-import { analyzeFood, NutritionResult } from './services/NutritionService';
+import { useState, useEffect } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { analyzeFood } from './services/NutritionService';
 
 interface Meal {
   id: string;
@@ -16,12 +17,62 @@ interface Meal {
   portion_size: string;
   imageUri: string;
   time: string;
+  date: string;
 }
+
+const STORAGE_KEY = 'calai_meals';
+const today = () => new Date().toISOString().split('T')[0];
 
 export default function App() {
   const [meals, setMeals] = useState<Meal[]>([]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [selectedMeal, setSelectedMeal] = useState<Meal | null>(null);
+
+  // Load meals from storage on startup
+  useEffect(() => {
+    loadMeals();
+  }, []);
+
+  const loadMeals = async () => {
+    try {
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const allMeals: Meal[] = JSON.parse(stored);
+        // Only show today's meals
+        const todayMeals = allMeals.filter(m => m.date === today());
+        setMeals(todayMeals);
+      }
+    } catch (e) {
+      console.log('Error loading meals:', e);
+    }
+  };
+
+  const saveMeals = async (newMeals: Meal[]) => {
+    try {
+      // Get all meals (including other days)
+      const stored = await AsyncStorage.getItem(STORAGE_KEY);
+      const allMeals: Meal[] = stored ? JSON.parse(stored) : [];
+      // Remove today's old meals and add new ones
+      const otherDays = allMeals.filter(m => m.date !== today());
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([...otherDays, ...newMeals]));
+    } catch (e) {
+      console.log('Error saving meals:', e);
+    }
+  };
+
+  const deleteMeal = async (id: string) => {
+    Alert.alert('Delete Meal', 'Remove this meal from your log?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete', style: 'destructive', onPress: async () => {
+          const updated = meals.filter(m => m.id !== id);
+          setMeals(updated);
+          await saveMeals(updated);
+          if (selectedMeal?.id === id) setSelectedMeal(null);
+        }
+      }
+    ]);
+  };
 
   const totalCalories = meals.reduce((sum, m) => sum + m.calories, 0);
   const totalProtein = meals.reduce((sum, m) => sum + m.protein_g, 0);
@@ -29,21 +80,19 @@ export default function App() {
   const totalFat = meals.reduce((sum, m) => sum + m.fat_g, 0);
   const goal = 2000;
   const progress = Math.min(totalCalories / goal, 1);
+  const ringColor = progress > 0.9 ? '#FF5252' : progress > 0.7 ? '#FFC107' : '#4CAF50';
 
   const snapMeal = async () => {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) {
-      Alert.alert('Permission needed', 'Please allow camera access to snap meals.');
+      Alert.alert('Permission needed', 'Please allow camera access.');
       return;
     }
-
     const result = await ImagePicker.launchCameraAsync({
       base64: true,
       quality: 0.7,
     });
-
     if (result.canceled || !result.assets[0].base64) return;
-
     setIsAnalyzing(true);
     try {
       const nutrition = await analyzeFood(result.assets[0].base64);
@@ -52,17 +101,18 @@ export default function App() {
         ...nutrition,
         imageUri: result.assets[0].uri,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        date: today(),
       };
-      setMeals(prev => [newMeal, ...prev]);
+      const updated = [newMeal, ...meals];
+      setMeals(updated);
       setSelectedMeal(newMeal);
+      await saveMeals(updated);
     } catch (error: any) {
-      Alert.alert('Error Details', String(error.message));
+      Alert.alert('Error', error.message || 'Could not analyse food. Please try again.');
     } finally {
       setIsAnalyzing(false);
     }
   };
-
-  const ringColor = progress > 0.9 ? '#FF5252' : progress > 0.7 ? '#FFC107' : '#4CAF50';
 
   return (
     <SafeAreaProvider>
@@ -81,7 +131,9 @@ export default function App() {
             <Text style={styles.calorieNumber}>{totalCalories}</Text>
             <Text style={styles.calorieLabel}>kcal eaten</Text>
           </View>
-          <Text style={styles.goalText}>{goal - totalCalories > 0 ? `${goal - totalCalories} kcal remaining` : 'Goal reached! 🎉'}</Text>
+          <Text style={styles.goalText}>
+            {goal - totalCalories > 0 ? `${goal - totalCalories} kcal remaining` : 'Goal reached! 🎉'}
+          </Text>
         </View>
 
         {/* Macros Row */}
@@ -130,7 +182,12 @@ export default function App() {
             </View>
           ) : (
             meals.map(meal => (
-              <TouchableOpacity key={meal.id} style={styles.mealItem} onPress={() => setSelectedMeal(meal)}>
+              <TouchableOpacity
+                key={meal.id}
+                style={styles.mealItem}
+                onPress={() => setSelectedMeal(meal)}
+                onLongPress={() => deleteMeal(meal.id)}
+              >
                 <Image source={{ uri: meal.imageUri }} style={styles.mealThumb} />
                 <View style={styles.mealInfo}>
                   <Text style={styles.mealName}>{meal.food_name}</Text>
@@ -141,6 +198,7 @@ export default function App() {
               </TouchableOpacity>
             ))
           )}
+          <Text style={styles.deleteHint}>Long press a meal to delete it</Text>
         </ScrollView>
 
         {/* Camera Button */}
@@ -200,4 +258,5 @@ const styles = StyleSheet.create({
   cameraButton: { backgroundColor: '#4CAF50', marginHorizontal: 24, marginBottom: 16, paddingVertical: 18, borderRadius: 16, alignItems: 'center' },
   cameraButtonText: { fontSize: 18, fontWeight: '700', color: '#ffffff' },
   analyzingRow: { flexDirection: 'row', alignItems: 'center' },
+  deleteHint: { fontSize: 11, color: '#444', textAlign: 'center', marginTop: 8, marginBottom: 16 },
 });
